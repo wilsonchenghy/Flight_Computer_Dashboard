@@ -1,14 +1,30 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
+import * as THREE from 'three';
 
-function RotatingCube({ euler }) {
+function correctQuaternionForThreeJS(q) {
+  return new THREE.Quaternion(-q.y, q.z, -q.x, q.w);
+}
+
+function RotatingCube({ euler, quaternion, rotationMode }) {
+  const meshRef = useRef();
+
+     useEffect(() => {
+     if (rotationMode === 'quaternion' && quaternion && meshRef.current) {
+       const corrected = correctQuaternionForThreeJS(quaternion);
+       meshRef.current.quaternion.copy(corrected);
+     } else if (rotationMode === 'euler' && euler && meshRef.current) {
+       meshRef.current.rotation.set(
+         -(euler.pitch * Math.PI) / 180, // X-axis (pitch)
+         (euler.yaw * Math.PI) / 180,   // Y-axis (yaw)
+         -(euler.roll * Math.PI) / 180   // Z-axis (roll)
+       );
+     }
+   }, [quaternion, euler, rotationMode]);
+
   return (
-    <mesh rotation={[
-      (euler.pitch * Math.PI) / 180, // X-axis (pitch)
-      (euler.yaw * Math.PI) / 180,   // Y-axis (yaw)
-      (euler.roll * Math.PI) / 180   // Z-axis (roll)
-    ]}>
+    <mesh ref={meshRef}>
       <boxGeometry args={[2, 2, 2]} />
       <meshStandardMaterial 
         color="#00d4ff" 
@@ -22,7 +38,7 @@ function RotatingCube({ euler }) {
 }
 
 // 3D Scene Component
-function Scene({ euler }) {
+function Scene({ euler, quaternion, rotationMode }) {
   return (
     <div style={{ 
       width: '100%', 
@@ -38,7 +54,7 @@ function Scene({ euler }) {
         <directionalLight position={[-5, -5, -5]} intensity={1} color="#ff6b6b" />
         <pointLight position={[0, 10, 0]} intensity={1.5} color="#00d4ff" />
         <pointLight position={[0, -10, 0]} intensity={0.8} color="#ffffff" />
-        <RotatingCube euler={euler} />
+        <RotatingCube euler={euler} quaternion={quaternion} rotationMode={rotationMode} />
         <OrbitControls enableZoom={true} enablePan={true} enableRotate={true} />
       </Canvas>
     </div>
@@ -116,7 +132,10 @@ function SerialPortManager({ onDataReceived, isConnected, onConnectionChange }) 
                 return truncatedBuffer;
               }
               
-              console.log('Current buffer:', newBuffer);
+              // Only log buffer if it's not empty
+              if (newBuffer.length > 0) {
+                console.log('Current buffer:', newBuffer);
+              }
               
               // Process all complete JSON objects in the buffer
               let processedIndex = 0;
@@ -144,8 +163,12 @@ function SerialPortManager({ onDataReceived, isConnected, onConnectionChange }) 
                         onDataReceived(data);
                         processedCount++;
                         console.log('Valid euler data received:', data);
+                      } else if (data.w !== undefined && data.x !== undefined && data.y !== undefined && data.z !== undefined) {
+                        onDataReceived(data);
+                        processedCount++;
+                        console.log('Valid quaternion data received:', data);
                       } else {
-                        console.log('JSON received but missing euler angles:', data);
+                        console.log('JSON received but missing euler angles or quaternion components:', data);
                       }
                     } catch (e) {
                       console.log('Failed to parse JSON:', jsonString);
@@ -371,7 +394,9 @@ function SerialPortManager({ onDataReceived, isConnected, onConnectionChange }) 
 
 function App() {
   const [euler, setEuler] = useState({ roll: 0, pitch: 0, yaw: 0 });
+  const [quaternion, setQuaternion] = useState({ w: 1, x: 0, y: 0, z: 0 });
   const [dataSource, setDataSource] = useState('http'); // 'http' or 'serial'
+  const [rotationMode, setRotationMode] = useState('euler'); // 'euler' or 'quaternion'
   const [isSerialConnected, setIsSerialConnected] = useState(false);
   const httpIntervalRef = useRef(null);
 
@@ -398,7 +423,12 @@ function App() {
 
   // Serial Data Handling
   const handleSerialData = (data) => {
-    setEuler(data);
+    // Check if data contains quaternion components
+    if (data.w !== undefined && data.x !== undefined && data.y !== undefined && data.z !== undefined) {
+      setQuaternion(data);
+    } else if (data.roll !== undefined && data.pitch !== undefined && data.yaw !== undefined) {
+      setEuler(data);
+    }
   };
 
   const handleSerialConnectionChange = (connected) => {
@@ -455,39 +485,74 @@ function App() {
           Real-time orientation monitoring and visualization
         </p>
         
-        {/* Data Source Selection */}
+        {/* Data Source and Rotation Mode Selection */}
         <div style={{ 
           marginBottom: '32px',
-          textAlign: 'center'
+          textAlign: 'center',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          gap: '24px',
+          flexWrap: 'wrap'
         }}>
-          <label style={{ 
-            marginRight: '16px', 
-            fontWeight: '600',
-            color: '#00d4ff',
-            fontSize: '18px'
-          }}>Data Source:</label>
-          <select 
-            value={dataSource} 
-            onChange={(e) => setDataSource(e.target.value)}
-            style={{ 
-              padding: '12px 20px', 
-              borderRadius: '12px', 
-              border: '2px solid rgba(0, 212, 255, 0.3)',
-              backgroundColor: 'rgba(20, 20, 30, 0.8)',
-              color: '#e0e0e0',
-              fontSize: '16px',
-              fontWeight: '500',
-              cursor: 'pointer',
-              transition: 'all 0.3s ease'
-            }}
-          >
-            <option value="http">HTTP (ESP32)</option>
-            <option value="serial">Serial Port</option>
-          </select>
+          <div>
+            <label style={{ 
+              marginRight: '16px', 
+              fontWeight: '600',
+              color: '#00d4ff',
+              fontSize: '18px'
+            }}>Data Source:</label>
+            <select 
+              value={dataSource} 
+              onChange={(e) => setDataSource(e.target.value)}
+              style={{ 
+                padding: '12px 20px', 
+                borderRadius: '12px', 
+                border: '2px solid rgba(0, 212, 255, 0.3)',
+                backgroundColor: 'rgba(20, 20, 30, 0.8)',
+                color: '#e0e0e0',
+                fontSize: '16px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                transition: 'all 0.3s ease'
+              }}
+            >
+              <option value="http">HTTP (ESP32)</option>
+              <option value="serial">Serial Port</option>
+            </select>
+          </div>
+
+          <div>
+            <label style={{ 
+              marginRight: '16px', 
+              fontWeight: '600',
+              color: '#ff6b6b',
+              fontSize: '18px'
+            }}>Rotation Mode:</label>
+            <select 
+              value={rotationMode} 
+              onChange={(e) => setRotationMode(e.target.value)}
+              style={{ 
+                padding: '12px 20px', 
+                borderRadius: '12px', 
+                border: '2px solid rgba(255, 107, 107, 0.3)',
+                backgroundColor: 'rgba(20, 20, 30, 0.8)',
+                color: '#e0e0e0',
+                fontSize: '16px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                transition: 'all 0.3s ease'
+              }}
+            >
+              <option value="euler">Euler Angles</option>
+              <option value="quaternion">Quaternion</option>
+            </select>
+          </div>
+
+
           
           {dataSource === 'http' && (
             <span style={{ 
-              marginLeft: '16px', 
               color: '#00d4ff',
               fontSize: '16px',
               fontWeight: '500',
@@ -534,7 +599,7 @@ function App() {
               3D Orientation
             </h3>
             <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <Scene euler={euler} />
+              <Scene euler={euler} quaternion={quaternion} rotationMode={rotationMode} />
             </div>
           </div>
           
@@ -555,52 +620,111 @@ function App() {
               textAlign: 'center',
               textShadow: '0 0 10px rgba(0, 212, 255, 0.5)'
             }}>
-              Euler Angles
+              {rotationMode === 'euler' ? 'Euler Angles' : 'Quaternion'}
             </h3>
             <div style={{ 
               fontSize: '24px', 
               lineHeight: '2',
               marginBottom: '32px'
             }}>
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '16px',
-                marginBottom: '12px',
-                background: 'rgba(0, 212, 255, 0.1)',
-                borderRadius: '12px',
-                border: '1px solid rgba(0, 212, 255, 0.2)'
-              }}>
-                <span style={{ color: '#00d4ff', fontWeight: '600' }}>Roll:</span>
-                <span style={{ color: '#e0e0e0', fontWeight: '700' }}>{euler.roll.toFixed(2)}°</span>
-              </div>
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '16px',
-                marginBottom: '12px',
-                background: 'rgba(255, 107, 107, 0.1)',
-                borderRadius: '12px',
-                border: '1px solid rgba(255, 107, 107, 0.2)'
-              }}>
-                <span style={{ color: '#ff6b6b', fontWeight: '600' }}>Pitch:</span>
-                <span style={{ color: '#e0e0e0', fontWeight: '700' }}>{euler.pitch.toFixed(2)}°</span>
-              </div>
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '16px',
-                marginBottom: '12px',
-                background: 'rgba(138, 43, 226, 0.1)',
-                borderRadius: '12px',
-                border: '1px solid rgba(138, 43, 226, 0.2)'
-              }}>
-                <span style={{ color: '#8a2be2', fontWeight: '600' }}>Yaw:</span>
-                <span style={{ color: '#e0e0e0', fontWeight: '700' }}>{euler.yaw.toFixed(2)}°</span>
-              </div>
+              {rotationMode === 'euler' ? (
+                <>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '16px',
+                    marginBottom: '12px',
+                    background: 'rgba(0, 212, 255, 0.1)',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(0, 212, 255, 0.2)'
+                  }}>
+                    <span style={{ color: '#00d4ff', fontWeight: '600' }}>Roll:</span>
+                    <span style={{ color: '#e0e0e0', fontWeight: '700' }}>{euler.roll.toFixed(2)}°</span>
+                  </div>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '16px',
+                    marginBottom: '12px',
+                    background: 'rgba(255, 107, 107, 0.1)',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(255, 107, 107, 0.2)'
+                  }}>
+                    <span style={{ color: '#ff6b6b', fontWeight: '600' }}>Pitch:</span>
+                    <span style={{ color: '#e0e0e0', fontWeight: '700' }}>{euler.pitch.toFixed(2)}°</span>
+                  </div>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '16px',
+                    marginBottom: '12px',
+                    background: 'rgba(138, 43, 226, 0.1)',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(138, 43, 226, 0.2)'
+                  }}>
+                    <span style={{ color: '#8a2be2', fontWeight: '600' }}>Yaw:</span>
+                    <span style={{ color: '#e0e0e0', fontWeight: '700' }}>{euler.yaw.toFixed(2)}°</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '16px',
+                    marginBottom: '12px',
+                    background: 'rgba(0, 212, 255, 0.1)',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(0, 212, 255, 0.2)'
+                  }}>
+                    <span style={{ color: '#00d4ff', fontWeight: '600' }}>W:</span>
+                    <span style={{ color: '#e0e0e0', fontWeight: '700' }}>{quaternion.w.toFixed(4)}</span>
+                  </div>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '16px',
+                    marginBottom: '12px',
+                    background: 'rgba(255, 107, 107, 0.1)',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(255, 107, 107, 0.2)'
+                  }}>
+                    <span style={{ color: '#ff6b6b', fontWeight: '600' }}>X:</span>
+                    <span style={{ color: '#e0e0e0', fontWeight: '700' }}>{quaternion.x.toFixed(4)}</span>
+                  </div>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '16px',
+                    marginBottom: '12px',
+                    background: 'rgba(138, 43, 226, 0.1)',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(138, 43, 226, 0.2)'
+                  }}>
+                    <span style={{ color: '#8a2be2', fontWeight: '600' }}>Y:</span>
+                    <span style={{ color: '#e0e0e0', fontWeight: '700' }}>{quaternion.y.toFixed(4)}</span>
+                  </div>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '16px',
+                    marginBottom: '12px',
+                    background: 'rgba(255, 193, 7, 0.1)',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(255, 193, 7, 0.2)'
+                  }}>
+                    <span style={{ color: '#ffc107', fontWeight: '600' }}>Z:</span>
+                    <span style={{ color: '#e0e0e0', fontWeight: '700' }}>{quaternion.z.toFixed(4)}</span>
+                  </div>
+                </>
+              )}
             </div>
             
             {/* Connection Status */}
@@ -624,12 +748,25 @@ function App() {
                   justifyContent: 'space-between',
                   marginBottom: '8px'
                 }}>
-                  <span style={{ color: '#a0a0a0' }}>Mode:</span>
+                  <span style={{ color: '#a0a0a0' }}>Data Source:</span>
                   <span style={{ 
                     color: dataSource === 'http' ? '#00d4ff' : '#ff6b6b',
                     fontWeight: '600'
                   }}>
                     {dataSource === 'http' ? 'HTTP' : 'Serial Port'}
+                  </span>
+                </div>
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  marginBottom: '8px'
+                }}>
+                  <span style={{ color: '#a0a0a0' }}>Rotation Mode:</span>
+                  <span style={{ 
+                    color: rotationMode === 'euler' ? '#00d4ff' : '#ff6b6b',
+                    fontWeight: '600'
+                  }}>
+                    {rotationMode === 'euler' ? 'Euler Angles' : 'Quaternion'}
                   </span>
                 </div>
                 <div style={{
